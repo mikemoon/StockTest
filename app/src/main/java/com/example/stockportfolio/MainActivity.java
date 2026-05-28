@@ -221,6 +221,7 @@ public class MainActivity extends Activity {
         selectingSuggestion = false;
         hideStockSuggestions();
         updateMarketTabUi();
+        renderList();
     }
 
     private void updateMarketTabUi() {
@@ -486,9 +487,12 @@ public class MainActivity extends Activity {
         listLayout.removeAllViews();
         updateSummary();
 
-        if (items.isEmpty()) {
+        List<StockItem> visibleItems = visibleItems();
+        if (visibleItems.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("아직 추가한 주식이 없습니다.");
+            empty.setText(currentMarket == Market.DOMESTIC
+                    ? "아직 추가한 국내 주식이 없습니다."
+                    : "아직 추가한 해외 주식이 없습니다.");
             empty.setTextSize(16);
             empty.setTextColor(Color.rgb(88, 100, 94));
             empty.setGravity(Gravity.CENTER);
@@ -497,9 +501,19 @@ public class MainActivity extends Activity {
             return;
         }
 
-        for (StockItem item : items) {
+        for (StockItem item : visibleItems) {
             listLayout.addView(createStockRow(item), matchWrapParams(0, dp(10)));
         }
+    }
+
+    private List<StockItem> visibleItems() {
+        List<StockItem> filtered = new ArrayList<>();
+        for (StockItem item : items) {
+            if (item.market == currentMarket) {
+                filtered.add(item);
+            }
+        }
+        return filtered;
     }
 
     private View createStockRow(StockItem item) {
@@ -531,15 +545,15 @@ public class MainActivity extends Activity {
 
         card.addView(createInfoLine("구분", item.market == Market.DOMESTIC ? "국내" : "해외"), matchWrapParams(0, dp(10)));
         card.addView(createInfoLine("수량", amountFormat.format(item.quantity) + "주"));
-        card.addView(createInfoLine("구매가", formatMoney(item.purchasePrice)));
-        card.addView(createInfoLine("구매금액", formatMoney(item.purchaseAmount())));
-        card.addView(createInfoLine("현재가", item.currentPrice == null ? "불러오는 중" : formatMoney(item.currentPrice)));
+        card.addView(createInfoLine("구매가", formatMoney(item.purchasePrice, item.market)));
+        card.addView(createInfoLine("구매금액", formatMoney(item.purchaseAmount(), item.market)));
+        card.addView(createInfoLine("현재가", item.currentPrice == null ? "불러오는 중" : formatMoney(item.currentPrice, item.market)));
 
         double currentValue = item.currentPrice == null ? 0 : item.currentPrice * item.quantity;
         double profitAmount = currentValue - item.purchaseAmount();
         TextView profit = createInfoLine("평가금액 / 손익", item.currentPrice == null
                 ? "-"
-                : formatMoney(currentValue) + " / " + signedMoney(profitAmount));
+                : formatMoney(currentValue, item.market) + " / " + signedMoney(profitAmount, item.market));
         if (item.currentPrice != null) {
             profit.setTextColor(profitAmount >= 0 ? Color.rgb(204, 47, 42) : Color.rgb(38, 95, 181));
         }
@@ -568,14 +582,16 @@ public class MainActivity extends Activity {
     private void updateSummary() {
         double invested = 0;
         double currentValue = 0;
-        for (StockItem item : items) {
+        List<StockItem> visibleItems = visibleItems();
+        for (StockItem item : visibleItems) {
             invested += item.purchaseAmount();
             if (item.currentPrice != null) {
                 currentValue += item.currentPrice * item.quantity;
             }
         }
-        summaryText.setText("총 " + items.size() + "개 | 구매금액 " + formatMoney(invested)
-                + " | 현재 평가 " + formatMoney(currentValue));
+        summaryText.setText((currentMarket == Market.DOMESTIC ? "국내" : "해외")
+                + " " + visibleItems.size() + "개 | 구매금액 " + formatMoney(invested, currentMarket)
+                + " | 현재 평가 " + formatMoney(currentValue, currentMarket));
     }
 
     private void startAutoRefresh() {
@@ -1107,12 +1123,27 @@ public class MainActivity extends Activity {
     }
 
     private String formatMoney(double value) {
-        return amountFormat.format(value) + "원";
+        return formatMoney(value, Market.DOMESTIC);
+    }
+
+    private String formatMoney(double value, Market market) {
+        return market == Market.OVERSEAS
+                ? "$" + amountFormat.format(value)
+                : amountFormat.format(value) + "원";
     }
 
     private String signedMoney(double value) {
-        String prefix = value > 0 ? "+" : "";
-        return prefix + amountFormat.format(value) + "원";
+        return signedMoney(value, Market.DOMESTIC);
+    }
+
+    private String signedMoney(double value, Market market) {
+        if (value > 0) {
+            return "+" + formatMoney(value, market);
+        }
+        if (value < 0) {
+            return "-" + formatMoney(Math.abs(value), market);
+        }
+        return formatMoney(value, market);
     }
 
     private LinearLayout.LayoutParams matchWrapParams(int left, int top) {
