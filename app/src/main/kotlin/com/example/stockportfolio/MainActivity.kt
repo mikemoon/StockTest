@@ -36,12 +36,14 @@ class MainActivity : Activity() {
     private companion object {
         const val PREFS_NAME = "stock_portfolio"
         const val KEY_ITEMS = "items"
+        const val KEY_WATCH_ITEMS = "watch_items"
         const val MAX_SUGGESTIONS = 5
         const val SEARCH_DELAY_MS = 350L
         const val AUTO_REFRESH_INTERVAL_MS = 60_000L
     }
 
     private val items = mutableListOf<StockItem>()
+    private val watchItems = mutableListOf<WatchItem>()
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val searchExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -78,9 +80,12 @@ class MainActivity : Activity() {
     private lateinit var quantityInput: EditText
     private lateinit var purchasePriceInput: EditText
     private lateinit var summaryText: TextView
+    private lateinit var portfolioTabButton: Button
+    private lateinit var watchlistTabButton: Button
     private lateinit var domesticTabButton: Button
     private lateinit var overseasTabButton: Button
     private lateinit var topRefreshButton: Button
+    private lateinit var addButton: Button
     private lateinit var preferences: SharedPreferences
     private var pendingStockSearch: Runnable? = null
     private var autoRefreshRunnable: Runnable? = null
@@ -89,11 +94,13 @@ class MainActivity : Activity() {
     private var refreshInProgress = false
     private var screenVisible = false
     private var currentMarket = Market.DOMESTIC
+    private var currentScreen = Screen.PORTFOLIO
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         loadItems()
+        loadWatchItems()
         setContentView(createContentView())
         renderList()
         refreshAllPrices(manual = false)
@@ -163,6 +170,19 @@ class MainActivity : Activity() {
         }
         root.addView(summaryText)
 
+        val screenTabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        root.addView(screenTabs)
+
+        portfolioTabButton = createButton("보유종목", Color.rgb(30, 122, 95), Color.WHITE).apply {
+            setOnClickListener { switchScreen(Screen.PORTFOLIO) }
+        }
+        screenTabs.addView(portfolioTabButton, weightParams(1f, 0))
+
+        watchlistTabButton = createButton("관심종목", Color.rgb(235, 241, 238), Color.rgb(24, 35, 30)).apply {
+            setOnClickListener { switchScreen(Screen.WATCHLIST) }
+        }
+        screenTabs.addView(watchlistTabButton, weightParams(1f, dp(8)))
+
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
@@ -200,7 +220,7 @@ class MainActivity : Activity() {
         }
         form.addView(actions, matchWrapParams(0, dp(12)))
 
-        val addButton = createButton("+ 종목 추가", Color.rgb(30, 122, 95), Color.WHITE).apply {
+        addButton = createButton("+ 종목 추가", Color.rgb(30, 122, 95), Color.WHITE).apply {
             setOnClickListener { addItem() }
         }
         actions.addView(addButton, weightParams(1f, 0))
@@ -212,7 +232,29 @@ class MainActivity : Activity() {
 
         listLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(listLayout)
+        updateScreenUi()
         return scrollView
+    }
+
+    private fun switchScreen(screen: Screen) {
+        if (currentScreen == screen) return
+        currentScreen = screen
+        selectingSuggestion = true
+        nameInput.setText("")
+        selectingSuggestion = false
+        hideStockSuggestions()
+        updateScreenUi()
+        renderList()
+    }
+
+    private fun updateScreenUi() {
+        if (!::portfolioTabButton.isInitialized) return
+        styleTab(portfolioTabButton, currentScreen == Screen.PORTFOLIO)
+        styleTab(watchlistTabButton, currentScreen == Screen.WATCHLIST)
+        val portfolioMode = currentScreen == Screen.PORTFOLIO
+        quantityInput.visibility = if (portfolioMode) View.VISIBLE else View.GONE
+        purchasePriceInput.visibility = if (portfolioMode) View.VISIBLE else View.GONE
+        addButton.text = if (portfolioMode) "+ 종목 추가" else "+ 관심 등록"
     }
 
     private fun switchMarket(market: Market) {
@@ -402,6 +444,10 @@ class MainActivity : Activity() {
     }
 
     private fun addItem() {
+        if (currentScreen == Screen.WATCHLIST) {
+            addWatchItem()
+            return
+        }
         val name = nameInput.text.toString().trim()
         val quantity = parseDouble(quantityInput.text.toString())
         val purchasePrice = parseDouble(purchasePriceInput.text.toString())
@@ -417,6 +463,24 @@ class MainActivity : Activity() {
         refreshPrice(item)
     }
 
+    private fun addWatchItem() {
+        val name = nameInput.text.toString().trim()
+        if (name.isEmpty()) {
+            Toast.makeText(this, "관심종목 이름을 입력하세요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (watchItems.any { it.market == currentMarket && it.name.equals(name, ignoreCase = true) }) {
+            Toast.makeText(this, "이미 등록된 관심종목입니다.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val item = WatchItem(name, currentMarket)
+        watchItems.add(item)
+        saveWatchItems()
+        clearInputs()
+        renderList()
+        refreshPrice(item)
+    }
+
     private fun clearInputs() {
         nameInput.setText("")
         quantityInput.setText("")
@@ -427,6 +491,10 @@ class MainActivity : Activity() {
     private fun renderList() {
         listLayout.removeAllViews()
         updateSummary()
+        if (currentScreen == Screen.WATCHLIST) {
+            renderWatchList()
+            return
+        }
         val visibleItems = visibleItems()
         if (visibleItems.isEmpty()) {
             listLayout.addView(TextView(this).apply {
@@ -441,7 +509,23 @@ class MainActivity : Activity() {
         visibleItems.forEach { listLayout.addView(createStockRow(it), matchWrapParams(0, dp(10))) }
     }
 
+    private fun renderWatchList() {
+        val visibleItems = visibleWatchItems()
+        if (visibleItems.isEmpty()) {
+            listLayout.addView(TextView(this).apply {
+                text = if (currentMarket == Market.DOMESTIC) "아직 등록한 국내 관심종목이 없습니다." else "아직 등록한 해외 관심종목이 없습니다."
+                textSize = 16f
+                setTextColor(Color.rgb(88, 100, 94))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(36), 0, 0)
+            })
+            return
+        }
+        visibleItems.forEach { listLayout.addView(createWatchRow(it), matchWrapParams(0, dp(10))) }
+    }
+
     private fun visibleItems() = items.filter { it.market == currentMarket }
+    private fun visibleWatchItems() = watchItems.filter { it.market == currentMarket }
 
     private fun createStockRow(item: StockItem): View {
         val card = LinearLayout(this).apply {
@@ -500,6 +584,49 @@ class MainActivity : Activity() {
         return card
     }
 
+    private fun createWatchRow(item: WatchItem): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        card.addView(header)
+
+        header.addView(TextView(this).apply {
+            text = item.name
+            textSize = 19f
+            setTextColor(Color.rgb(24, 35, 30))
+            setTypeface(null, 1)
+        }, weightParams(1f, 0))
+
+        val delete = createButton("삭제", Color.rgb(247, 230, 227), Color.rgb(150, 41, 31)).apply {
+            minWidth = dp(72)
+            setOnClickListener {
+                watchItems.remove(item)
+                saveWatchItems()
+                renderList()
+            }
+        }
+        header.addView(delete, LinearLayout.LayoutParams(dp(76), dp(42)))
+
+        card.addView(createInfoLine("구분", if (item.market == Market.DOMESTIC) "국내" else "해외"), matchWrapParams(0, dp(10)))
+        card.addView(createInfoLine("현재가", item.currentPrice?.let { formatMoney(it, item.market) } ?: "불러오는 중"))
+
+        item.errorMessage?.let {
+            card.addView(TextView(this).apply {
+                text = it
+                textSize = 13f
+                setTextColor(Color.rgb(164, 86, 40))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        return card
+    }
+
     private fun createInfoLine(label: String, value: String) = TextView(this).apply {
         text = "$label: $value"
         textSize = 15f
@@ -508,6 +635,11 @@ class MainActivity : Activity() {
     }
 
     private fun updateSummary() {
+        if (currentScreen == Screen.WATCHLIST) {
+            val visibleItems = visibleWatchItems()
+            summaryText.text = "${if (currentMarket == Market.DOMESTIC) "국내" else "해외"} 관심종목 ${visibleItems.size}개"
+            return
+        }
         val visibleItems = visibleItems()
         val invested = visibleItems.sumOf { it.purchaseAmount() }
         val currentValue = visibleItems.sumOf { (it.currentPrice ?: 0.0) * it.quantity }
@@ -533,7 +665,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshAllPrices(manual: Boolean) {
-        if (items.isEmpty()) {
+        if (items.isEmpty() && watchItems.isEmpty()) {
             updateSummary()
             return
         }
@@ -545,6 +677,7 @@ class MainActivity : Activity() {
         updateRefreshButtonState()
         if (manual) Toast.makeText(this, "현재가를 불러오는 중입니다.", Toast.LENGTH_SHORT).show()
         val refreshTargets = items.toList()
+        val watchRefreshTargets = watchItems.toList()
         executor.execute {
             refreshTargets.forEach { item ->
                 item.errorMessage = null
@@ -555,10 +688,20 @@ class MainActivity : Activity() {
                     item.errorMessage = "현재가 API 호출에 실패했습니다."
                 }
             }
+            watchRefreshTargets.forEach { item ->
+                item.errorMessage = null
+                try {
+                    item.currentPrice = fetchCurrentPrice(item.name, item.market)
+                    item.errorMessage = if (item.currentPrice == null) currentPriceErrorMessage(item.market) else null
+                } catch (_: Exception) {
+                    item.errorMessage = "현재가 API 호출에 실패했습니다."
+                }
+            }
             mainHandler.post {
                 refreshInProgress = false
                 updateRefreshButtonState()
                 saveItems()
+                saveWatchItems()
                 renderList()
             }
         }
@@ -590,6 +733,25 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshPrice(item: WatchItem) {
+        executor.execute {
+            try {
+                val price = fetchCurrentPrice(item.name, item.market)
+                mainHandler.post {
+                    item.currentPrice = price
+                    item.errorMessage = if (price == null) currentPriceErrorMessage(item.market) else null
+                    saveWatchItems()
+                    renderList()
+                }
+            } catch (_: Exception) {
+                mainHandler.post {
+                    item.errorMessage = "현재가 API 호출에 실패했습니다."
+                    renderList()
+                }
+            }
+        }
+    }
+
     private fun currentPriceErrorMessage(market: Market) = if (market == Market.DOMESTIC) {
         "국내 현재가를 찾지 못했습니다. 예: 삼성전자, 005930처럼 입력해보세요."
     } else {
@@ -597,10 +759,14 @@ class MainActivity : Activity() {
     }
 
     private fun fetchCurrentPrice(item: StockItem): Double? {
-        return if (item.market == Market.DOMESTIC) {
-            fetchDomesticCurrentPrice(item.name)
+        return fetchCurrentPrice(item.name, item.market)
+    }
+
+    private fun fetchCurrentPrice(name: String, market: Market): Double? {
+        return if (market == Market.DOMESTIC) {
+            fetchDomesticCurrentPrice(name)
         } else {
-            fetchOverseasCurrentPrice(item.name)
+            fetchOverseasCurrentPrice(name)
         }
     }
 
@@ -900,6 +1066,43 @@ class MainActivity : Activity() {
         preferences.edit().putString(KEY_ITEMS, array.toString()).apply()
     }
 
+    private fun loadWatchItems() {
+        watchItems.clear()
+        val raw = preferences.getString(KEY_WATCH_ITEMS, "[]") ?: "[]"
+        try {
+            val array = JSONArray(raw)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val name = obj.getString("name")
+                val item = WatchItem(
+                    name = name,
+                    market = parseMarket(obj.optString("market", ""), name),
+                )
+                if (obj.has("currentPrice") && !obj.isNull("currentPrice")) {
+                    item.currentPrice = obj.getDouble("currentPrice")
+                }
+                watchItems.add(item)
+            }
+        } catch (_: Exception) {
+            watchItems.clear()
+        }
+    }
+
+    private fun saveWatchItems() {
+        val array = JSONArray()
+        watchItems.forEach { item ->
+            val obj = JSONObject()
+            try {
+                obj.put("name", item.name)
+                obj.put("market", item.market.name)
+                obj.put("currentPrice", item.currentPrice ?: JSONObject.NULL)
+                array.put(obj)
+            } catch (_: Exception) {
+            }
+        }
+        preferences.edit().putString(KEY_WATCH_ITEMS, array.toString()).apply()
+    }
+
     private fun parseDouble(raw: String): Double? = raw.replace(",", "").trim().toDoubleOrNull()
 
     private fun formatMoney(value: Double): String = formatMoney(value, Market.DOMESTIC)
@@ -936,6 +1139,11 @@ class MainActivity : Activity() {
         OVERSEAS,
     }
 
+    private enum class Screen {
+        PORTFOLIO,
+        WATCHLIST,
+    }
+
     private data class StockItem(
         val name: String,
         val quantity: Double,
@@ -946,6 +1154,13 @@ class MainActivity : Activity() {
     ) {
         fun purchaseAmount(): Double = purchasePrice * quantity
     }
+
+    private data class WatchItem(
+        val name: String,
+        val market: Market,
+        var currentPrice: Double? = null,
+        var errorMessage: String? = null,
+    )
 
     private data class StockSuggestion(
         val symbol: String,
