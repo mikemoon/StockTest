@@ -3,5 +3,7 @@
 local.properties
 build/
 app/build/
+desktop/build/
+.jdks/
 captures/
 *.iml
