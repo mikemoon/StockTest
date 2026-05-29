@@ -3,6 +3,7 @@ plugins {
 }
 
 apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.google.gms.google-services"
 
 android {
     namespace "com.example.stockportfolio"
@@ -21,4 +22,8 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
     }
+}
+
+dependencies {
+    implementation "com.google.firebase:firebase-database-ktx:20.0.4"
 }

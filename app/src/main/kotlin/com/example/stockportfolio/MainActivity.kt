@@ -18,6 +18,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -86,6 +91,7 @@ class MainActivity : Activity() {
     private lateinit var overseasTabButton: Button
     private lateinit var topRefreshButton: Button
     private lateinit var addButton: Button
+    private var syncReference: DatabaseReference? = null
     private lateinit var preferences: SharedPreferences
     private var pendingStockSearch: Runnable? = null
     private var autoRefreshRunnable: Runnable? = null
@@ -95,6 +101,7 @@ class MainActivity : Activity() {
     private var screenVisible = false
     private var currentMarket = Market.DOMESTIC
     private var currentScreen = Screen.PORTFOLIO
+    private var applyingRemoteSync = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -103,6 +110,7 @@ class MainActivity : Activity() {
         loadWatchItems()
         setContentView(createContentView())
         renderList()
+        setupCloudSync()
         refreshAllPrices(manual = false)
     }
 
@@ -714,6 +722,70 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun setupCloudSync() {
+        try {
+            try {
+                FirebaseDatabase.getInstance().setPersistenceEnabled(true)
+            } catch (_: Exception) {
+            }
+            syncReference = FirebaseDatabase.getInstance()
+                .reference
+                .child("stockPortfolio")
+                .child("sharedLists")
+                .child("default")
+            syncReference?.keepSynced(true)
+            syncReference?.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val portfolioJson = snapshot.child("portfolioJson").getValue(String::class.java)
+                    val watchJson = snapshot.child("watchJson").getValue(String::class.java)
+                    if (portfolioJson == null && watchJson == null) {
+                        pushAllListsToCloud()
+                        return
+                    }
+
+                    applyingRemoteSync = true
+                    portfolioJson?.let {
+                        applyItemsJson(it)
+                        preferences.edit().putString(KEY_ITEMS, it).apply()
+                    }
+                    watchJson?.let {
+                        applyWatchItemsJson(it)
+                        preferences.edit().putString(KEY_WATCH_ITEMS, it).apply()
+                    }
+                    applyingRemoteSync = false
+                    renderList()
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Toast.makeText(this@MainActivity, "목록 동기화에 실패했습니다.", Toast.LENGTH_SHORT).show()
+                }
+            })
+        } catch (_: Exception) {
+            Toast.makeText(this, "클라우드 동기화를 시작하지 못했습니다.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun pushAllListsToCloud() {
+        syncReference?.updateChildren(
+            mapOf(
+                "portfolioJson" to serializeItems(),
+                "watchJson" to serializeWatchItems(),
+            ),
+        )
+    }
+
+    private fun pushPortfolioToCloud() {
+        if (!applyingRemoteSync) {
+            syncReference?.child("portfolioJson")?.setValue(serializeItems())
+        }
+    }
+
+    private fun pushWatchListToCloud() {
+        if (!applyingRemoteSync) {
+            syncReference?.child("watchJson")?.setValue(serializeWatchItems())
+        }
+    }
+
     private fun refreshPrice(item: StockItem) {
         executor.execute {
             try {
@@ -1019,6 +1091,11 @@ class MainActivity : Activity() {
     private fun loadItems() {
         items.clear()
         val raw = preferences.getString(KEY_ITEMS, "[]") ?: "[]"
+        applyItemsJson(raw)
+    }
+
+    private fun applyItemsJson(raw: String) {
+        items.clear()
         try {
             val array = JSONArray(raw)
             for (i in 0 until array.length()) {
@@ -1049,6 +1126,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveItems() {
+        val raw = serializeItems()
+        preferences.edit().putString(KEY_ITEMS, raw).apply()
+        pushPortfolioToCloud()
+    }
+
+    private fun serializeItems(): String {
         val array = JSONArray()
         items.forEach { item ->
             val obj = JSONObject()
@@ -1063,12 +1146,17 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
             }
         }
-        preferences.edit().putString(KEY_ITEMS, array.toString()).apply()
+        return array.toString()
     }
 
     private fun loadWatchItems() {
         watchItems.clear()
         val raw = preferences.getString(KEY_WATCH_ITEMS, "[]") ?: "[]"
+        applyWatchItemsJson(raw)
+    }
+
+    private fun applyWatchItemsJson(raw: String) {
+        watchItems.clear()
         try {
             val array = JSONArray(raw)
             for (i in 0 until array.length()) {
@@ -1089,6 +1177,12 @@ class MainActivity : Activity() {
     }
 
     private fun saveWatchItems() {
+        val raw = serializeWatchItems()
+        preferences.edit().putString(KEY_WATCH_ITEMS, raw).apply()
+        pushWatchListToCloud()
+    }
+
+    private fun serializeWatchItems(): String {
         val array = JSONArray()
         watchItems.forEach { item ->
             val obj = JSONObject()
@@ -1100,7 +1194,7 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
             }
         }
-        preferences.edit().putString(KEY_WATCH_ITEMS, array.toString()).apply()
+        return array.toString()
     }
 
     private fun parseDouble(raw: String): Double? = raw.replace(",", "").trim().toDoubleOrNull()
