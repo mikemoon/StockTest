@@ -40,6 +40,11 @@ run_kospi.bat --search 삼성
 run_kospi.bat --search 005930
 ```
 
+무설치 데스크탑 exe만들기
+$env:JAVA_HOME='C:\Program Files\jdk-17'
+$env:Path="C:\Program Files\jdk-17\bin;" + $env:Path
+.\gradlew.bat :desktop:createDistributable
+
 ## 참고
 
 - 자료 출처는 네이버 금융 KOSPI 시가총액 페이지입니다.
